@@ -1,0 +1,10 @@
+[
+  {
+    "id_curso": 1,
+    "nm_curso": "Java Básico",
+    "ds_curso": "Fundamentos de Java",
+    "dt_inicio": "2025-01-10T00:00:00",
+    "sts_curso": "E",
+    "id_area": 1
+  }
+]

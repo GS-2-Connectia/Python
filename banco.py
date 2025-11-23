@@ -8,35 +8,11 @@ DB_USER = os.getenv("ORACLE_USER", "rm566516")
 DB_PASSWORD = os.getenv("ORACLE_PASSWORD", "210806")
 DB_DSN = os.getenv("ORACLE_DSN", "oracle.fiap.com.br:1521/orcl")
 
-POOL = None
+
+def get_conexao():
+    return oracledb.connect(user=DB_USER, password=DB_PASSWORD, dsn=DB_DSN)
 
 
-# --------------------------
-# Pool de Conexões
-# --------------------------
-def init_pool(min=1, max=3, increment=1):
-    global POOL
-    if POOL is None:
-        POOL = oracledb.create_pool(
-            user=DB_USER,
-            password=DB_PASSWORD,
-            dsn=DB_DSN,
-            min=min,
-            max=max,
-            increment=increment,
-            encoding="UTF-8"
-        )
-    return POOL
-
-
-def get_conn():
-    init_pool()
-    return POOL.acquire()
-
-
-# --------------------------
-# Conversão para JSON-friendly
-# --------------------------
 def rows_to_dicts(cursor, rows):
     cols = [c[0].lower() for c in cursor.description]
     result = []
@@ -55,77 +31,64 @@ def rows_to_dicts(cursor, rows):
 # USUÁRIOS (T_CON_USUARIO)
 # ==========================
 
-def get_next_user_id(conn):
-    cur = conn.cursor()
-    cur.execute("SELECT NVL(MAX(ID_USUARIO),0)+1 FROM T_CON_USUARIO")
-    next_id = cur.fetchone()[0]
-    cur.close()
-    return next_id
+def get_next_user_id():
+    with get_conexao() as con:
+        with con.cursor() as cur:
+            cur.execute("SELECT NVL(MAX(ID_USUARIO),0)+1 FROM T_CON_USUARIO")
+            return cur.fetchone()[0]
 
 
 def create_user(data):
     required = ["nm_usuario", "ds_email", "ds_senha", "id_carreira", "tp_plano"]
-
     for campo in required:
         if campo not in data or not data[campo]:
             raise ValueError(f"Campo obrigatório ausente: {campo}")
 
-    conn = get_conn()
-    try:
-        cur = conn.cursor()
+    with get_conexao() as con:
+        with con.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM T_CON_USUARIO WHERE DS_EMAIL = :email",
+                        {"email": data["ds_email"]})
+            if cur.fetchone()[0] > 0:
+                raise ValueError("E-mail já cadastrado")
 
-        cur.execute("SELECT COUNT(*) FROM T_CON_USUARIO WHERE DS_EMAIL = :email",
-                    {"email": data["ds_email"]})
-        if cur.fetchone()[0] > 0:
-            raise ValueError("E-mail já cadastrado")
+            new_id = get_next_user_id()
 
-        new_id = get_next_user_id(conn)
+            cur.execute("""
+                INSERT INTO T_CON_USUARIO
+                (ID_USUARIO, NM_USUARIO, DS_EMAIL, DS_SENHA, ID_CARREIRA, TP_PLANO)
+                VALUES (:id, :nm, :email, :senha, :carreira, :plano)
+            """, {
+                "id": new_id,
+                "nm": data["nm_usuario"],
+                "email": data["ds_email"],
+                "senha": data["ds_senha"],
+                "carreira": int(data["id_carreira"]),
+                "plano": data["tp_plano"]
+            })
 
-        cur.execute("""
-            INSERT INTO T_CON_USUARIO
-            (ID_USUARIO, NM_USUARIO, DS_EMAIL, DS_SENHA, ID_CARREIRA, TP_PLANO)
-            VALUES (:id, :nm, :email, :senha, :carreira, :plano)
-        """, {
-            "id": new_id,
-            "nm": data["nm_usuario"],
-            "email": data["ds_email"],
-            "senha": data["ds_senha"],
-            "carreira": int(data["id_carreira"]),
-            "plano": data["tp_plano"]
-        })
-
-        conn.commit()
+        con.commit()
         return new_id
-
-    finally:
-        conn.close()
 
 
 def list_users():
-    conn = get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT ID_USUARIO, NM_USUARIO, DS_EMAIL, ID_CARREIRA, TP_PLANO
-            FROM T_CON_USUARIO
-            ORDER BY ID_USUARIO
-        """)
-        rows = cur.fetchall()
-        return rows_to_dicts(cur, rows)
-    finally:
-        conn.close()
+    with get_conexao() as con:
+        with con.cursor() as cur:
+            cur.execute("""
+                SELECT ID_USUARIO, NM_USUARIO, DS_EMAIL, ID_CARREIRA, TP_PLANO
+                FROM T_CON_USUARIO
+                ORDER BY ID_USUARIO
+            """)
+            rows = cur.fetchall()
+            return rows_to_dicts(cur, rows)
 
 
 def delete_user(id_usuario):
-    conn = get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM T_CON_USUARIO WHERE ID_USUARIO = :id",
-                    {"id": int(id_usuario)})
-        conn.commit()
+    with get_conexao() as con:
+        with con.cursor() as cur:
+            cur.execute("DELETE FROM T_CON_USUARIO WHERE ID_USUARIO = :id",
+                        {"id": int(id_usuario)})
+        con.commit()
         return cur.rowcount > 0
-    finally:
-        conn.close()
 
 
 # ==========================
@@ -133,49 +96,40 @@ def delete_user(id_usuario):
 # ==========================
 
 def list_courses():
-    conn = get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT NM_CURSO, ID_CURSO, DS_CURSO, TP_CONTEUDO,
-                   DT_INICIO, STS_CURSO, ID_USUARIO, ID_AREA
-            FROM T_CON_CURSOS
-        """)
-        rows = cur.fetchall()
-        return rows_to_dicts(cur, rows)
-    finally:
-        conn.close()
+    with get_conexao() as con:
+        with con.cursor() as cur:
+            cur.execute("""
+                SELECT NM_CURSO, ID_CURSO, DS_CURSO, TP_CONTEUDO,
+                       DT_INICIO, STS_CURSO, ID_USUARIO, ID_AREA
+                FROM T_CON_CURSOS
+            """)
+            rows = cur.fetchall()
+            return rows_to_dicts(cur, rows)
 
 
 def query_courses_by_status(status):
-    conn = get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT ID_CURSO, NM_CURSO, DS_CURSO, STS_CURSO, ID_AREA
-            FROM T_CON_CURSOS
-            WHERE STS_CURSO = :st
-        """, {"st": status})
-        rows = cur.fetchall()
-        return rows_to_dicts(cur, rows)
-    finally:
-        conn.close()
+    with get_conexao() as con:
+        with con.cursor() as cur:
+            cur.execute("""
+                SELECT ID_CURSO, NM_CURSO, DS_CURSO, STS_CURSO, ID_AREA
+                FROM T_CON_CURSOS
+                WHERE STS_CURSO = :st
+            """, {"st": status})
+            rows = cur.fetchall()
+            return rows_to_dicts(cur, rows)
 
 
 def query_user_courses(id_usuario):
-    conn = get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT ID_CURSO, NM_CURSO, DS_CURSO, DT_INICIO, STS_CURSO, ID_AREA
-            FROM T_CON_CURSOS
-            WHERE ID_USUARIO = :u
-            ORDER BY DT_INICIO DESC NULLS LAST
-        """, {"u": int(id_usuario)})
-        rows = cur.fetchall()
-        return rows_to_dicts(cur, rows)
-    finally:
-        conn.close()
+    with get_conexao() as con:
+        with con.cursor() as cur:
+            cur.execute("""
+                SELECT ID_CURSO, NM_CURSO, DS_CURSO, DT_INICIO, STS_CURSO, ID_AREA
+                FROM T_CON_CURSOS
+                WHERE ID_USUARIO = :u
+                ORDER BY DT_INICIO DESC NULLS LAST
+            """, {"u": int(id_usuario)})
+            rows = cur.fetchall()
+            return rows_to_dicts(cur, rows)
 
 
 # ==========================
